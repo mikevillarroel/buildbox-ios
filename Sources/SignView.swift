@@ -489,7 +489,7 @@ struct AboutView: View {
                         
                         // Social icons
                         HStack(spacing: 20) {
-                            Link(destination: URL(string: "https://x.com/GOT_MUNCH1ES")!) {
+                            Link(destination: URL(string: "https://x.com/MikeBuildsApp")!) {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.system(size: 28))
                                     .foregroundColor(.primary)
