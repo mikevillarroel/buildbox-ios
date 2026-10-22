@@ -531,6 +531,95 @@ class MachOSigner {
     // MARK: - Insert placeholder LC_CODE_SIGNATURE (before hashing)
     /// Inserts an LC_CODE_SIGNATURE load command pointing at end-of-file with size 0.
     /// Call this BEFORE computing page hashes, so hashes cover the final header layout.
+    /// Adds an LC_LOAD_DYLIB command for `installPath` into a Mach-O executable
+    /// (thin arm64 or the arm64 slice of a fat binary). The command is written
+    /// into the zero padding after the existing load commands, so no file
+    /// offsets move. The binary must be re-signed afterwards (BuildBox signs
+    /// right after injecting). Throws if there is no room — never corrupts.
+    static func addLoadDylib(executableURL: URL, installPath: String) throws {
+        var bytes = [UInt8](try Data(contentsOf: executableURL))
+        func u32le(_ o: Int) -> UInt32 { UInt32(bytes[o]) | UInt32(bytes[o+1]) << 8 | UInt32(bytes[o+2]) << 16 | UInt32(bytes[o+3]) << 24 }
+        func u32be(_ o: Int) -> UInt32 { UInt32(bytes[o]) << 24 | UInt32(bytes[o+1]) << 16 | UInt32(bytes[o+2]) << 8 | UInt32(bytes[o+3]) }
+        func put32le(_ o: Int, _ v: UInt32) { bytes[o] = UInt8(v & 0xff); bytes[o+1] = UInt8((v >> 8) & 0xff); bytes[o+2] = UInt8((v >> 16) & 0xff); bytes[o+3] = UInt8((v >> 24) & 0xff) }
+
+        var base = 0
+        if bytes.count >= 8 && u32be(0) == 0xCAFEBABE {
+            // Fat binary: locate the arm64 slice (CPU_TYPE_ARM64 = 0x0100000C).
+            let nfat = Int(u32be(4))
+            var found: Int? = nil
+            for i in 0..<nfat {
+                let e = 8 + i * 20
+                if e + 12 <= bytes.count && u32be(e) == 0x0100000C { found = Int(u32be(e + 8)); break }
+            }
+            guard let off = found else { throw NSError(domain: "MachOInject", code: 1, userInfo: [NSLocalizedDescriptionKey: "Injection: no arm64 slice in this binary"]) }
+            base = off
+        }
+        guard base + 32 <= bytes.count, u32le(base) == 0xFEEDFACF else {
+            throw NSError(domain: "MachOInject", code: 2, userInfo: [NSLocalizedDescriptionKey: "Injection: not a 64-bit Mach-O binary"])
+        }
+
+        let ncmds = Int(u32le(base + 16))
+        let sizeofcmds = Int(u32le(base + 20))
+        let cmdsStart = base + 32
+        let cmdsEnd = cmdsStart + sizeofcmds
+
+        // Walk the load commands: duplicate check + find the first real file
+        // offset after the commands (the free padding ends there).
+        var off = cmdsStart
+        var minOff = Int.max
+        var already = false
+        for _ in 0..<ncmds {
+            if off + 8 > bytes.count { break }
+            let cmd = u32le(off)
+            let size = Int(u32le(off + 4))
+            if size < 8 { break }
+            if cmd == 0x19 { // LC_SEGMENT_64
+                let fileoff = Int(u32le(off + 40)) | Int(u32le(off + 44)) << 32
+                let filesize = Int(u32le(off + 48)) | Int(u32le(off + 52)) << 32
+                if fileoff > 0 && filesize > 0 { minOff = min(minOff, fileoff) }
+                let nsects = Int(u32le(off + 64))
+                for si in 0..<nsects {
+                    let so = off + 72 + si * 80
+                    if so + 52 <= bytes.count {
+                        let soff = Int(u32le(so + 48))
+                        if soff > 0 { minOff = min(minOff, soff) }
+                    }
+                }
+            }
+            if cmd == 0x0C || cmd == 0x80000018 || cmd == 0x8000001C || cmd == 0x18 {
+                let nameOff = Int(u32le(off + 8))
+                if nameOff >= 24 && nameOff < size {
+                    let start = off + nameOff
+                    var end = start
+                    while end < off + size && bytes[end] != 0 { end += 1 }
+                    if String(bytes: bytes[start..<end], encoding: .utf8) == installPath { already = true }
+                }
+            }
+            off += size
+        }
+        if already { return }
+
+        let pathBytes = [UInt8](installPath.utf8) + [0]
+        let cmdsize = (24 + pathBytes.count + 7) & ~7
+        guard minOff != Int.max, cmdsEnd + cmdsize <= minOff else {
+            throw NSError(domain: "MachOInject", code: 3, userInfo: [NSLocalizedDescriptionKey: "Injection: no room for a new load command in \(executableURL.lastPathComponent)"])
+        }
+
+        var cmd = [UInt8](repeating: 0, count: cmdsize)
+        func cput(_ o: Int, _ v: UInt32) { cmd[o] = UInt8(v & 0xff); cmd[o+1] = UInt8((v >> 8) & 0xff); cmd[o+2] = UInt8((v >> 16) & 0xff); cmd[o+3] = UInt8((v >> 24) & 0xff) }
+        cput(0, 0x0C)            // LC_LOAD_DYLIB
+        cput(4, UInt32(cmdsize))
+        cput(8, 24)              // name offset
+        cput(12, 2)              // timestamp
+        cput(16, 0)              // current version
+        cput(20, 0)              // compatibility version
+        for i in 0..<pathBytes.count { cmd[24 + i] = pathBytes[i] }
+        bytes.replaceSubrange(cmdsEnd..<(cmdsEnd + cmdsize), with: cmd)
+        put32le(base + 16, UInt32(ncmds + 1))
+        put32le(base + 20, UInt32(sizeofcmds + cmdsize))
+        try Data(bytes).write(to: executableURL)
+    }
+
     static func insertPlaceholderSignature(machoData: inout Data) throws {
         let (header, commands) = try parseHeader(data: machoData)
         let LC_CODE_SIGNATURE: UInt32 = 0x1D

@@ -5,7 +5,7 @@ struct SignView: View {
     // IPA handed over from the Compile tab's "Continue to Sign" button.
     // Set by CompileView, consumed once in onAppear, then cleared.
     @Binding var pendingSignIpa: URL?
-    
+
     @AppStorage("hasCertificate") private var hasCertificate = false
     @AppStorage("certP12Name") private var certP12Name = ""
     
@@ -20,11 +20,21 @@ struct SignView: View {
     @State private var signStatus = ""
     @State private var signLog = ""
     @State private var signedIPAURL: URL?
+    @State private var importedIsSigned = false
+    @State private var signStartedAt: Date?
+    @State private var signHeartbeat: Timer?
+    @State private var lastSignPhase = ""
     @State private var showingShare = false
-    @State private var installServer: InstallServer?
     @State private var isInstalling = false
     @State private var dotsTimer: Timer?
     @State private var showingIPAImporter = false
+    @State private var injectDylibURLs: [URL] = []
+    @State private var showingDylibImporter = false
+    @State private var showingClearConfirm = false
+    @State private var showingClearIpaConfirm = false
+    @State private var importedIconData: Data?
+    @State private var dylibToRemove: URL?
+    @State private var showingDylibRemoveConfirm = false
     @FocusState private var focusedField: Field?
     
     enum Field {
@@ -34,6 +44,21 @@ struct SignView: View {
     var body: some View {
         NavigationView {
             Form {
+                // Header (mirrors Compile tab exactly: icon + title)
+                Section {
+                    VStack(spacing: 20) {
+                        Image(systemName: "signature")
+                            .font(.system(size: 60))
+                            .foregroundColor(.secondary)
+                        Text("Sign")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                }
+                .listRowBackground(Color.clear)
+
                 // Import IPA
                 Section {
                     Button("Import IPA") {
@@ -44,6 +69,45 @@ struct SignView: View {
                         Text(url.lastPathComponent)
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    }
+                    if let iconData = importedIconData, let uiIcon = UIImage(data: iconData) {
+                        HStack(spacing: 10) {
+                            Image(uiImage: uiIcon)
+                                .resizable()
+                                .frame(width: 44, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(appName.isEmpty ? "App" : appName)
+                                    .font(.subheadline)
+                                Text(bundleID)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                    }
+                    if ipaURL != nil {
+                        Button("Clear IPA") {
+                            showingClearIpaConfirm = true
+                        }
+                        .foregroundColor(.red)
+                        .alert("Clear Imported IPA?", isPresented: $showingClearIpaConfirm) {
+                            Button("Clear IPA", role: .destructive) {
+                                ipaURL = nil
+                                signedIPAURL = nil
+                                appName = ""
+                                bundleID = ""
+                                version = ""
+                                packageName = ""
+                                importedIsSigned = false
+                                importedIconData = nil
+                                signStatus = ""
+                                signLog += "Imported IPA cleared.\n"
+                            }
+                            Button("Cancel", role: .cancel) { }
+                        } message: {
+                            Text("Are you sure you want to clear the imported IPA?")
+                        }
                     }
                 }
                 .sheet(isPresented: $showingIPAImporter) {
@@ -61,96 +125,99 @@ struct SignView: View {
                                 finalURL = url
                             }
                             ipaURL = finalURL
-                            signStatus = "Reading IPA..."
+                            signedIPAURL = nil
+                            importedIsSigned = false
                             signLog = ""
-                            // Read metadata in background to avoid freezing
-                            DispatchQueue.global(qos: .userInitiated).async {
-                                let meta = IPASigner.shared.readMetadata(ipaURL: finalURL)
-                                DispatchQueue.main.async {
-                                    if let n = meta.appName { appName = n }
-                                    if let b = meta.bundleID { bundleID = b }
-                                    if let v = meta.version {
-                                        version = v
-                                        packageName = "\(appName)_\(v).ipa"
-                                    }
-                                    signStatus = ""
-                                    if meta.appName == nil {
-                                        signStatus = "Could not read IPA metadata"
-                                    }
-                                }
-                            }
+                            inspectIPA(finalURL)
                         }
                     }
                 }
                 
-                // App Name
-                Section(header: Text("App Name")) {
-                    TextField("MyApp", text: $appName)
-                        .focused($focusedField, equals: .appName)
-                }
-                
-                // Bundle Identifier
-                Section(header: Text("Bundle Identifier")) {
-                    TextField("com.myapp.app", text: $bundleID)
-                        .autocapitalization(.none)
-                        .focused($focusedField, equals: .bundleID)
-                }
-                
-                // Version
-                Section(header: Text("Version")) {
-                    TextField("1.0.0", text: $version)
-                        .focused($focusedField, equals: .version)
-                }
-                
-                // Select Certificate
-                Section(header: Text("Select Certificate")) {
-                    NavigationLink(destination: CertificateView()) {
-                        Text(certP12Name.isEmpty ? "No certificate selected" : certP12Name)
-                            .foregroundColor(certP12Name.isEmpty ? .secondary : .primary)
+                // App Info (compact: all fields in one section)
+                Section(header: Text("App Info")) {
+                    HStack {
+                        Text("App Name")
+                            .frame(width: 86, alignment: .leading)
+                        TextField("MyApp", text: $appName)
+                            .foregroundColor(.secondary)
+                            .focused($focusedField, equals: .appName)
+                    }
+                    HStack {
+                        Text("Bundle ID")
+                            .frame(width: 86, alignment: .leading)
+                        TextField("com.myapp.app", text: $bundleID)
+                            .foregroundColor(.secondary)
+                            .autocapitalization(.none)
+                            .focused($focusedField, equals: .bundleID)
+                    }
+                    HStack {
+                        Text("Version")
+                            .frame(width: 86, alignment: .leading)
+                        TextField("1.0.0", text: $version)
+                            .foregroundColor(.secondary)
+                            .focused($focusedField, equals: .version)
+                    }
+                    HStack {
+                        Text("Package")
+                            .frame(width: 86, alignment: .leading)
+                        TextField("MyApp_1.0.0.ipa", text: $packageName)
+                            .foregroundColor(.secondary)
+                            .autocapitalization(.none)
+                            .focused($focusedField, equals: .packageName)
                     }
                 }
-                
-                // Package file name
-                Section(header: Text("Package file name")) {
-                    TextField("MyApp_1.0.0.ipa", text: $packageName)
-                        .autocapitalization(.none)
-                        .focused($focusedField, equals: .packageName)
-                }
-                
-                // Certificate status
-                Section(header: Text("Certificate")) {
-                    if hasCertificate {
+
+                // Injection (optional dylibs woven into the app at sign time)
+                Section(header: Text("Injection (optional)")) {
+                    ForEach(injectDylibURLs, id: \.path) { url in
                         HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            Text(certP12Name.isEmpty ? "Certificate imported" : certP12Name)
-                                .font(.subheadline)
-                        }
-                    } else {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.red)
-                                Text("Certificate incomplete")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                            }
-                            if certP12Name.isEmpty {
-                                Text("Missing: .p12 file")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                            }
-                            if !hasCertificate && !certP12Name.isEmpty {
-                                Text("Missing: .mobileprovision file")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                            }
-                            Text("Import both in the Certificate tab")
-                                .font(.caption)
+                            Text(url.lastPathComponent)
                                 .foregroundColor(.secondary)
+                                .lineLimit(1)
+                            Spacer()
+                            Button("Remove", role: .destructive) {
+                                dylibToRemove = url
+                                showingDylibRemoveConfirm = true
+                            }
+                            .foregroundColor(.red)
+                        }
+                    }
+                    Button("Add Dylib…") {
+                        showingDylibImporter = true
+                    }
+                    if injectDylibURLs.isEmpty {
+                        Text("Dylibs are copied into the app and loaded at launch — how tweaks and mods are made.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .sheet(isPresented: $showingDylibImporter) {
+                    DocumentPicker { urls in
+                        showingDylibImporter = false
+                        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                        for url in urls where url.pathExtension.lowercased() == "dylib" {
+                            let dest = docs.appendingPathComponent(url.lastPathComponent)
+                            try? FileManager.default.removeItem(at: dest)
+                            if (try? FileManager.default.copyItem(at: url, to: dest)) != nil {
+                                if !injectDylibURLs.contains(dest) { injectDylibURLs.append(dest) }
+                            } else if !injectDylibURLs.contains(url) {
+                                injectDylibURLs.append(url)
+                            }
                         }
                     }
                 }
+                .alert("Remove Dylib?", isPresented: $showingDylibRemoveConfirm) {
+                    Button("Yes", role: .destructive) {
+                        if let url = dylibToRemove { injectDylibURLs.removeAll { $0 == url } }
+                        dylibToRemove = nil
+                    }
+                    Button("Cancel", role: .cancel) { dylibToRemove = nil }
+                } message: {
+                    Text("Are you sure you want to remove \(dylibToRemove?.lastPathComponent ?? "this dylib")?")
+                }
+
+                // Certificate (integrated one-time import)
+                CertificateSection()
                 
                 // Signature button - big blue like TendieMaker, tappable anywhere
                 Section {
@@ -165,10 +232,8 @@ struct SignView: View {
                     }
                     .buttonStyle(PressableBlueButtonStyle())
                     .disabled(ipaURL == nil || isSigning || !hasCertificate)
-                }
-                
-                // Install button (always visible, disabled until signed)
-                Section {
+
+                    // Install App — same section, right under Signature (compact)
                     Button("Install App") {
                         // Use signed IPA if available, otherwise the imported IPA directly
                         guard let ipa = signedIPAURL ?? ipaURL else { return }
@@ -179,7 +244,7 @@ struct SignView: View {
                         let realBundleID = meta.bundleID ?? bundleID
                         let realAppName = meta.appName ?? appName
                         let realVersion = meta.version ?? version
-                        DirectInstaller.uploadAndInstall(
+                        LocalInstaller.install(
                             ipaURL: ipa,
                             bundleID: realBundleID,
                             appName: realAppName,
@@ -215,25 +280,15 @@ struct SignView: View {
                             }
                         )
                     }
-                    .buttonStyle(PressableBlueButtonStyle())
-                    .disabled((signedIPAURL == nil && ipaURL == nil) || isInstalling)
+                    .buttonStyle(PressableGreenButtonStyle())
+                    .disabled((signedIPAURL == nil && !importedIsSigned) || isInstalling)
+                    if ipaURL != nil && signedIPAURL == nil && !importedIsSigned {
+                        Text("This IPA is not signed yet — tap Signature first. Install only works with a signed IPA.")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
                 }
 
-                // Share signed IPA (for testing in ESign, etc.)
-                if signedIPAURL != nil {
-                    Section {
-                        Button("Share IPA") {
-                            showingShare = true
-                        }
-                        .buttonStyle(PressableBlueButtonStyle())
-                    }
-                    .sheet(isPresented: $showingShare) {
-                        if let ipa = signedIPAURL {
-                            ShareSheet(items: [ipa])
-                        }
-                    }
-                }
-                
                 // Verbose signing log
                 if !signLog.isEmpty {
                     Section(header: Text("Signing Log")) {
@@ -253,19 +308,44 @@ struct SignView: View {
                         Button("Copy Log") {
                             UIPasteboard.general.string = signLog
                         }
-                        .buttonStyle(PressableSmallGreenButtonStyle())
+                        .buttonStyle(PressableSmallBlueButtonStyle())
+                        if isSigning || isInstalling {
+                            Button("Cancel") {
+                                if isSigning {
+                                    IPASigner.shared.cancelCurrentSign()
+                                    signLog += "[BuildBox] Cancelling... (stops at the next step)\n"
+                                }
+                                if isInstalling {
+                                    LocalInstaller.cancelActiveInstall()
+                                    isInstalling = false
+                                    stopDots()
+                                    signLog += "[BuildBox] Install cancelled by user\n"
+                                }
+                            }
+                            .buttonStyle(PressableSmallRedButtonStyle())
+                        }
                         Button("Clear") {
-                            // Reset IPA state
-                            ipaURL = nil
-                            signedIPAURL = nil
-                            appName = ""
-                            bundleID = ""
-                            version = ""
-                            packageName = ""
-                            signStatus = ""
-                            signLog = ""
+                            showingClearConfirm = true
                         }
                         .buttonStyle(PressableSmallRedButtonStyle())
+                        .alert("Clear Sign Form?", isPresented: $showingClearConfirm) {
+                            Button("Yes", role: .destructive) {
+                                // Reset IPA state (injection list included)
+                                ipaURL = nil
+                                signedIPAURL = nil
+                                appName = ""
+                                bundleID = ""
+                                version = ""
+                                packageName = ""
+                                signStatus = ""
+                                signLog = ""
+                                injectDylibURLs = []
+                                importedIconData = nil
+                            }
+                            Button("Cancel", role: .cancel) { }
+                        } message: {
+                            Text("Are you sure you want to clear the imported IPA, the form, the injection list and the log?")
+                        }
                         Spacer()
                     }
                     .padding(.vertical, 2)
@@ -273,7 +353,8 @@ struct SignView: View {
                     .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                 }
             }
-            .navigationTitle(ipaURL?.deletingPathExtension().lastPathComponent ?? "Sign")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -288,9 +369,38 @@ struct SignView: View {
                 }
                 // IPA handed over from the Compile tab's "Continue to Sign" —
                 // load it once into the Sign tab, then clear the handoff
-                if ipaURL == nil, let pending = pendingSignIpa {
+                if let pending = pendingSignIpa {
                     ipaURL = pending
                     pendingSignIpa = nil
+                    inspectIPA(pending)
+                }
+                // Belt-and-suspenders for share-sheet imports: files
+                // shared INTO BuildBox land in Documents/Inbox. If the
+                // onOpenURL handoff got swallowed (cold-launch timing),
+                // the IPA is still picked up here instead of vanishing
+                // (Miguel's 2026-10-21 report: "abre BuildBox pero no
+                // carga el IPA").
+                if ipaURL == nil {
+                    let inbox = docsDir.appendingPathComponent("Inbox")
+                    if let files = try? FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil),
+                       let shared = files.first(where: { $0.pathExtension.lowercased() == "ipa" }) {
+                        let dest = docsDir.appendingPathComponent("shared-\(shared.lastPathComponent)")
+                        try? FileManager.default.removeItem(at: dest)
+                        if (try? FileManager.default.copyItem(at: shared, to: dest)) != nil {
+                            try? FileManager.default.removeItem(at: shared)
+                            ipaURL = dest
+                            inspectIPA(dest)
+                        }
+                    }
+                }
+            }
+            // If a share arrives while this tab is already on screen,
+            // onAppear never re-fires — react to the handoff directly.
+            .onChange(of: pendingSignIpa) { _, newValue in
+                if let pending = newValue {
+                    ipaURL = pending
+                    pendingSignIpa = nil
+                    inspectIPA(pending)
                 }
             }
         }
@@ -320,29 +430,36 @@ struct SignView: View {
         signLog += "\n"
     }
     
-    private func installViaITMS() {
-        guard let ipa = signedIPAURL else { return }
-        
-        // Start local server
-        let server = InstallServer()
-        do {
-            try server.start(ipaURL: ipa, bundleID: bundleID, appName: appName, version: version)
-            self.installServer = server
-            
-            // Open itms-services URL
-            if let installURL = server.installURL {
-                UIApplication.shared.open(installURL) { success in
-                    if !success {
-                        print("[BuildBox] Failed to open itms-services URL")
-                    }
+    /// Read an imported/handed-over IPA on a background queue: fill the
+    /// name/bundle/version fields and detect whether it already carries a
+    /// code signature (that detection gates the Install App button).
+    private func inspectIPA(_ url: URL) {
+        signStatus = "Reading IPA..."
+        importedIconData = nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Fast phase: metadata + icon land on the form immediately.
+            let meta = IPASigner.shared.readMetadata(ipaURL: url)
+            let icon = IPASigner.shared.readIconData(ipaURL: url)
+            DispatchQueue.main.async {
+                if let n = meta.appName { appName = n }
+                if let b = meta.bundleID { bundleID = b }
+                if let v = meta.version {
+                    version = v
+                    packageName = "\(appName)_\(v).ipa"
                 }
+                importedIconData = icon
+                signStatus = meta.appName == nil ? "Could not read IPA metadata" : ""
             }
-        } catch {
-            print("[BuildBox] Failed to start install server: \(error)")
-            signLog += "[BuildBox] Install failed: \(error.localizedDescription)\n"
+            // Slow phase: the signed check reads the app's whole executable
+            // (hundreds of MB on big apps) — it must never hold the
+            // metadata hostage, so it updates the Install gate separately.
+            let signed = IPASigner.shared.isSigned(ipaURL: url)
+            DispatchQueue.main.async {
+                importedIsSigned = signed
+            }
         }
     }
-    
+
     private func sign() {
         guard let ipa = ipaURL else { return }
         guard hasCertificate else {
@@ -356,7 +473,7 @@ struct SignView: View {
         let provName = UserDefaults.standard.string(forKey: "certProvisionName") ?? ""
         
         guard !p12Name.isEmpty, !provName.isEmpty else {
-            signStatus = "Certificate not found — reimport in Certificate tab"
+            signStatus = "Certificate not found — reimport it in the Certificate section above"
             return
         }
         
@@ -365,7 +482,7 @@ struct SignView: View {
         
         guard FileManager.default.fileExists(atPath: p12URL.path),
               FileManager.default.fileExists(atPath: provURL.path) else {
-            signStatus = "Certificate files missing — reimport in Certificate tab"
+            signStatus = "Certificate files missing — reimport it in the Certificate section above"
             return
         }
         
@@ -376,6 +493,16 @@ struct SignView: View {
         signStatus = "Signing \(appName) v\(version)..."
         signLog = "[BuildBox] Starting sign for \(appName) with zsign...\n"
         startDots()
+        // Heartbeat: the log must never look dead — every 20s it reports
+        // the current phase and elapsed time (Miguel's no-blind-spinner rule).
+        signStartedAt = Date()
+        lastSignPhase = "Starting"
+        signHeartbeat?.invalidate()
+        signHeartbeat = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in
+            guard self.isSigning, let start = self.signStartedAt else { return }
+            let secs = Int(Date().timeIntervalSince(start))
+            self.signLog += "[BuildBox] ... still working: \(self.lastSignPhase) (\(secs)s)\n"
+        }
         
         IPASigner.shared.signWithZSign(
             ipaURL: ipa,
@@ -385,14 +512,18 @@ struct SignView: View {
             appName: appName,
             bundleID: bundleID,
             version: version,
+            injectDylibs: injectDylibURLs,
             progress: { msg in
                 DispatchQueue.main.async {
                     self.signStatus = msg
+                    self.lastSignPhase = msg
                     self.signLog += "[BuildBox] \(msg)\n"
                 }
             },
             completion: { result in
                 self.isSigning = false
+                self.signHeartbeat?.invalidate()
+                self.signHeartbeat = nil
                 self.stopDots()
                 switch result {
                 case .success(let url):
@@ -401,14 +532,40 @@ struct SignView: View {
                     try? FileManager.default.removeItem(at: dest)
                     try? FileManager.default.copyItem(at: url, to: dest)
                     self.signedIPAURL = dest
+                    self.registerSigned(dest: dest)
                     self.signStatus = "Signed successfully!"
                     self.signLog += "[BuildBox] Signed successfully: \(dest.lastPathComponent)\n"
+                    self.signLog += "[BuildBox] Saved to the Library tab — install or share it from there.\n"
                 case .failure(let error):
                     self.signStatus = "Signing failed: \(error.localizedDescription)"
                     self.signLog += "[BuildBox] FAILED: \(error.localizedDescription)\n"
                 }
             }
         )
+    }
+
+    // MARK: - Signed library registration
+
+    private var docsDir: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+    }
+
+    // After a successful sign, register the IPA in the library (its own
+    // tab) so it can be installed later without re-signing.
+    private func registerSigned(dest: URL) {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: dest.path)
+        let sizeMB = (attrs?[.size] as? NSNumber).map { $0.doubleValue / 1_000_000 } ?? 0
+        let entry = SignedIPAEntry(fileName: dest.lastPathComponent, appName: appName,
+                                   bundleID: bundleID, version: version,
+                                   date: Date().timeIntervalSince1970, sizeMB: sizeMB)
+        var list = SignedLibraryStore.load().filter { $0.fileName != entry.fileName }
+        list.insert(entry, at: 0)
+        SignedLibraryStore.save(list)
+        if let iconData = importedIconData {
+            let dir = docsDir.appendingPathComponent("lib-icons")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? iconData.write(to: dir.appendingPathComponent(entry.fileName + ".png"))
+        }
     }
 }
 
@@ -426,115 +583,138 @@ struct AboutView: View {
         // Last resort: system placeholder
         return Image(systemName: "app.fill")
     }
-    
+
+    // About in the Layers / TendieMaker design (Miguel's rule, 2026-10-21):
+    // dark cards, dev row with brand social buttons, big eye-catching
+    // donate buttons. No "How it works" here — that lives on the splash.
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(spacing: 16) {
-                    bundleImage("BuildBoxIcon")
-                        .resizable()
-                        .frame(width: 80, height: 80)
-                        .cornerRadius(18)
-                        .padding(.top, 40)
-                    
-                    Text("BuildBox")
-                        .font(.largeTitle)
-                        .bold()
-                    
-                    Text("Beta2")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    Text("Compile Swift on a Linux server, sign on-device with your certificate, install.")
-                        .font(.body)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    
-                    Divider()
-                        .padding(.horizontal)
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("How it works")
-                            .font(.headline)
-                        Text("1. Write or import Swift source in the Compile tab")
-                        Text("2. Server compiles it to an unsigned IPA")
-                        Text("3. Import your certificate in the Certificate tab")
-                        Text("4. Sign the IPA on-device in the Sign tab")
-                        Text("5. Install directly on your iPhone")
-                    }
-                    .font(.subheadline)
-                    .padding(.horizontal)
-                    
-                    Divider()
-                        .padding(.horizontal)
-                    
-                    VStack(spacing: 8) {
-                        Text("Developer")
-                            .font(.headline)
-                        
-                        // Miguel profile
-                        HStack {
-                            bundleImage("profile-photo")
+            ZStack {
+                Color.black.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 14) {
+                        // Card 1: identity
+                        VStack(spacing: 0) {
+                            bundleImage("BuildBoxIcon")
                                 .resizable()
-                                .frame(width: 44, height: 44)
-                                .clipShape(Circle())
-                            VStack(alignment: .leading) {
-                                Text("Miguel Villarroel")
-                                    .font(.headline)
-                                Text("Developer")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
+                                .frame(width: 104, height: 104)
+                                .cornerRadius(24)
+                            Text("BuildBox")
+                                .font(.system(size: 34, weight: .bold))
+                                .padding(.top, 14)
+                            Text("v2.0.0")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 4)
+                            Text("Compile on GitHub, sign on-device with your certificate, install.")
+                                .font(.body)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.top, 12)
                         }
-                        
-                        // Social icons
-                        HStack(spacing: 20) {
-                            Link(destination: URL(string: "https://x.com/MikeBuildsApp")!) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 28))
-                                    .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(24)
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(26)
+
+                        // Card 2: people + support
+                        VStack(spacing: 0) {
+                            HStack(spacing: 12) {
+                                bundleImage("profile-photo")
+                                    .resizable()
+                                    .frame(width: 56, height: 56)
+                                    .clipShape(Circle())
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Miguel Villarroel")
+                                        .font(.headline)
+                                    Text("Developer")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                HStack(spacing: 8) {
+                                    Link(destination: URL(string: "https://x.com/MikeBuildsApp")!) {
+                                        bundleImage("x-logo")
+                                            .resizable()
+                                            .frame(width: 44, height: 44)
+                                            .cornerRadius(11)
+                                    }
+                                    Link(destination: URL(string: "https://instagram.com/mikevillarroel")!) {
+                                        bundleImage("instagram-logo")
+                                            .resizable()
+                                            .frame(width: 44, height: 44)
+                                            .cornerRadius(11)
+                                    }
+                                    Link(destination: URL(string: "https://discord.gg/3C3fygY35E")!) {
+                                        bundleImage("discord-logo")
+                                            .resizable()
+                                            .frame(width: 44, height: 44)
+                                            .cornerRadius(11)
+                                    }
+                                }
                             }
-                            Link(destination: URL(string: "https://instagram.com/mikevillarroel")!) {
-                                Image(systemName: "camera.circle.fill")
-                                    .font(.system(size: 28))
-                                    .foregroundColor(.primary)
+                            Divider()
+                                .padding(.vertical, 14)
+                            HStack(spacing: 12) {
+                                Text("🤖")
+                                    .font(.system(size: 30))
+                                    .frame(width: 56, height: 56)
+                                    .background(Color(.systemGray5))
+                                    .clipShape(Circle())
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("MikeBorg")
+                                        .font(.headline)
+                                    Text("Collaborator")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
                             }
+                            Divider()
+                                .padding(.vertical, 14)
+                            Text("Support BuildBox")
+                                .font(.system(size: 22, weight: .bold))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Link(destination: URL(string: "https://paypal.me/mikevillarroel")!) {
+                                VStack(spacing: 2) {
+                                    Text("Donate with PayPal")
+                                        .font(.system(size: 20, weight: .bold))
+                                        .foregroundColor(.white)
+                                    Text("@mikevillarroel")
+                                        .font(.subheadline)
+                                        .foregroundColor(.white.opacity(0.75))
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 15)
+                                .background(Color(red: 0.04, green: 0.52, blue: 1.0))
+                                .cornerRadius(16)
+                            }
+                            .padding(.top, 14)
+                            Link(destination: URL(string: "https://cash.app/$mikevillarroel")!) {
+                                VStack(spacing: 2) {
+                                    Text("Donate with Cash App")
+                                        .font(.system(size: 20, weight: .bold))
+                                        .foregroundColor(.white)
+                                    Text("$mikevillarroel")
+                                        .font(.subheadline)
+                                        .foregroundColor(.white.opacity(0.75))
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 15)
+                                .background(Color(red: 0.0, green: 0.84, blue: 0.2))
+                                .cornerRadius(16)
+                            }
+                            .padding(.top, 12)
                         }
-                        .padding(.top, 4)
-                        
-                        // MikeBorg
-                        HStack {
-                            Text("🤖")
-                                .font(.title2)
-                                .frame(width: 44, height: 44)
-                                .background(Color(.systemGray5))
-                                .clipShape(Circle())
-                            VStack(alignment: .leading) {
-                                Text("MikeBorg")
-                                    .font(.headline)
-                                Text("Collaborator")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 6)
-                        
-                        Divider()
-                            .padding(.horizontal)
-                        
-                        Text("Donate")
-                            .font(.headline)
-                        Link("PayPal: paypal.me/mikevillarroel", destination: URL(string: "https://paypal.me/mikevillarroel")!)
-                            .font(.subheadline)
-                        Text("Cash App: $mikevillarroel")
-                            .font(.subheadline)
+                        .padding(20)
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(26)
                     }
-                    .padding(.horizontal)
-                    
-                    Spacer()
+                    .padding(14)
                 }
             }
-            .navigationTitle("About")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }

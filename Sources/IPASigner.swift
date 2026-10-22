@@ -23,12 +23,14 @@ class IPASigner {
                 // Resolve nested IPA (GitHub Actions wraps IPA in a ZIP)
                 let resolvedIPA = self.resolveNestedIPA(ipaURL: ipaURL)
 
+                self.signCancelRequested = false
                 progress("Unzipping IPA...")
                 let workDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                 try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
                 defer { try? FileManager.default.removeItem(at: workDir) }
 
-                try self.unzip(ipaURL: resolvedIPA, to: workDir)
+                try self.unzip(ipaURL: resolvedIPA, to: workDir, cancelCheck: { self.signCancelRequested })
+                if self.signCancelRequested { throw SignError.signingFailed("Cancelled by user") }
                 
                 // Find the .app bundle
                 progress("Finding app bundle...")
@@ -64,26 +66,35 @@ class IPASigner {
     // MARK: - ZSign-based signing (uses embedded zsign C++ library)
     func signWithZSign(ipaURL: URL, p12URL: URL, p12Password: String, provisionURL: URL,
                        appName: String, bundleID: String, version: String,
+                       injectDylibs: [URL] = [],
                        progress: @escaping (String) -> Void,
                        completion: @escaping (Result<URL, Error>) -> Void) {
         
         DispatchQueue.global(qos: .userInitiated).async {
             do {
+                progress("Preparing IPA...")
                 // Resolve nested IPA (GitHub Actions wraps IPA in a ZIP)
                 let resolvedIPA = self.resolveNestedIPA(ipaURL: ipaURL)
 
+                self.signCancelRequested = false
                 progress("Unzipping IPA...")
                 let workDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                 try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
                 defer { try? FileManager.default.removeItem(at: workDir) }
 
-                try self.unzip(ipaURL: resolvedIPA, to: workDir)
+                try self.unzip(ipaURL: resolvedIPA, to: workDir, cancelCheck: { self.signCancelRequested }, progress: progress)
+                if self.signCancelRequested { throw SignError.signingFailed("Cancelled by user") }
                 
                 // Find the .app bundle
                 progress("Finding app bundle...")
                 let payloadDir = workDir.appendingPathComponent("Payload")
                 let appBundle = try self.findAppBundle(in: payloadDir)
                 
+                if !injectDylibs.isEmpty {
+                    progress("Injecting dylibs...")
+                    try self.inject(dylibURLs: injectDylibs, into: appBundle)
+                }
+
                 progress("Signing with zsign...")
                 let signed = ZSign.sign(
                     appPath: appBundle.path,
@@ -98,6 +109,7 @@ class IPASigner {
                 guard signed else {
                     throw SignError.signingFailed("zsign returned false")
                 }
+                if self.signCancelRequested { throw SignError.signingFailed("Cancelled by user") }
 
                 progress("Repackaging IPA...")
                 let outputURL = FileManager.default.temporaryDirectory
@@ -113,6 +125,29 @@ class IPASigner {
         }
     }
     
+    // MARK: - Dylib injection
+    /// Copies each dylib into the .app root and inserts an LC_LOAD_DYLIB
+    /// (@executable_path/<name>) into the app's main executable. Runs BEFORE
+    /// zsign so the modified binary and the injected dylibs get signed.
+    private func inject(dylibURLs: [URL], into appBundle: URL) throws {
+        let infoURL = appBundle.appendingPathComponent("Info.plist")
+        guard let info = NSDictionary(contentsOf: infoURL),
+              let execName = info["CFBundleExecutable"] as? String else {
+            throw SignError.signingFailed("Injection: cannot read the app's executable name")
+        }
+        let execURL = appBundle.appendingPathComponent(execName)
+        guard FileManager.default.fileExists(atPath: execURL.path) else {
+            throw SignError.signingFailed("Injection: app executable not found")
+        }
+        for src in dylibURLs {
+            let dest = appBundle.appendingPathComponent(src.lastPathComponent)
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.copyItem(at: src, to: dest)
+            try MachOSigner.addLoadDylib(executableURL: execURL,
+                                         installPath: "@executable_path/\(src.lastPathComponent)")
+        }
+    }
+
     // MARK: - Load P12 identity
     private func loadIdentity(p12URL: URL, password: String) throws -> (SecIdentity, SecCertificate) {
         guard let p12Data = try? Data(contentsOf: p12URL) else {
@@ -357,6 +392,19 @@ class IPASigner {
     // MARK: - Read IPA metadata (name, bundle ID, version from Info.plist)
     // If the IPA is nested (a ZIP containing a single .ipa), extract the inner one
     func resolveNestedIPA(ipaURL: URL) -> URL {
+        // Decide from the ZIP central directory — NEVER unzip just to look.
+        // The old version extracted the whole IPA first (an invisible
+        // multi-minute pass on large IPAs), and it ran at import (twice,
+        // via readMetadata + isSigned) and again at sign time.
+        if let data = try? Data(contentsOf: ipaURL),
+           let entries = parseCentralDirectory([UInt8](data)) {
+            if entries.contains(where: { $0.name.hasPrefix("Payload/") }) {
+                return ipaURL // normal IPA
+            }
+            let rootIPAs = entries.filter { $0.name.lowercased().hasSuffix(".ipa") && !$0.name.contains("/") }
+            if rootIPAs.count != 1 { return ipaURL }
+            // True wrapper ZIP (e.g. a GitHub artifact): extract below.
+        }
         let fm = FileManager.default
         let tempDir = fm.temporaryDirectory.appendingPathComponent("nested-\(UUID().uuidString)")
         do {
@@ -397,6 +445,106 @@ class IPASigner {
         return readMetadataViaUnzip(ipaURL: ipaURL)
     }
 
+    /// True when the IPA's main executable carries a real code signature
+    /// (LC_CODE_SIGNATURE with non-zero size). Unsigned builds report 0.
+    /// Used to gate the Install button: no signature, no install.
+    func isSigned(ipaURL: URL) -> Bool {
+        if let fast = isSignedFast(ipaURL: ipaURL) { return fast }
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("issigned-\(UUID().uuidString)")
+        do {
+            try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: tempDir) }
+            let resolved = resolveNestedIPA(ipaURL: ipaURL)
+            try unzip(ipaURL: resolved, to: tempDir)
+            let appBundle = try findAppBundle(in: tempDir.appendingPathComponent("Payload"))
+            let plistURL = appBundle.appendingPathComponent("Info.plist")
+            guard let plistData = try? Data(contentsOf: plistURL),
+                  let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any],
+                  let execName = plist["CFBundleExecutable"] as? String else { return false }
+            let execURL = appBundle.appendingPathComponent(execName)
+            guard let fh = try? FileHandle(forReadingFrom: execURL) else { return false }
+            defer { try? fh.close() }
+            guard let first = try? fh.read(upToCount: 16), first.count >= 8 else { return false }
+            let b = [UInt8](first)
+            var sliceOffset: UInt64 = 0
+            if b[0] == 0xCA && b[1] == 0xFE && b[2] == 0xBA && b[3] == 0xBE, first.count >= 16 {
+                // FAT binary: first arch slice offset is big-endian at byte 8
+                sliceOffset = UInt64(b[8]) << 24 | UInt64(b[9]) << 16 | UInt64(b[10]) << 8 | UInt64(b[11])
+            }
+            try? fh.seek(toOffset: sliceOffset)
+            guard let header = try? fh.read(upToCount: 8192), header.count >= 32 else { return false }
+            return Self.machOCodeSignatureSize([UInt8](header)) > 0
+        } catch {
+            return false
+        }
+    }
+
+    /// Walk a thin 64-bit Mach-O header; return the LC_CODE_SIGNATURE data size (0 = unsigned).
+    private static func machOCodeSignatureSize(_ bytes: [UInt8]) -> Int {
+        func u32(_ off: Int) -> UInt32 {
+            guard off + 4 <= bytes.count else { return 0 }
+            return UInt32(bytes[off]) | UInt32(bytes[off + 1]) << 8 | UInt32(bytes[off + 2]) << 16 | UInt32(bytes[off + 3]) << 24
+        }
+        // Thin arm64 magic in file order: CF FA ED FE (0xFEEDFACF little-endian)
+        guard u32(0) == 0xFEEDFACF else { return 0 }
+        let ncmds = Int(u32(16))
+        var off = 32
+        for _ in 0..<ncmds {
+            let cmd = u32(off)
+            let size = Int(u32(off + 4))
+            if cmd == 0x1D { // LC_CODE_SIGNATURE
+                return Int(u32(off + 12)) // datasize
+            }
+            guard size > 0 else { break }
+            off += size
+        }
+        return 0
+    }
+
+    /// Extract ONE entry's data using the central directory (no full unzip).
+    private func extractEntryData(bytes: [UInt8], entry: ZipEntry) -> Data? {
+        let lh = entry.localHeaderOffset
+        guard lh + 30 <= bytes.count,
+              bytes[lh] == 0x50 && bytes[lh+1] == 0x4B &&
+              bytes[lh+2] == 0x03 && bytes[lh+3] == 0x04 else { return nil }
+        let localNameLen = Int(readU16(bytes, lh + 26))
+        let localExtraLen = Int(readU16(bytes, lh + 28))
+        let dataStart = lh + 30 + localNameLen + localExtraLen
+        let dataEnd = dataStart + Int(entry.compSize)
+        guard dataStart <= bytes.count, dataEnd <= bytes.count else { return nil }
+        if entry.method == 0 { return Data(bytes[dataStart..<dataEnd]) }
+        if entry.method == 8 {
+            let comp = Data(bytes[dataStart..<dataEnd])
+            return try? Self.inflate(data: comp, expectedSize: Int(entry.uncompSize))
+        }
+        return nil
+    }
+
+    /// Fast signed check: extract only Info.plist + the main executable
+    /// (2 entries) instead of unzipping all ~6,000 files.
+    private func isSignedFast(ipaURL: URL) -> Bool? {
+        guard let data = try? Data(contentsOf: ipaURL) else { return nil }
+        let bytes = [UInt8](data)
+        guard let entries = parseCentralDirectory(bytes),
+              let plistEntry = entries.first(where: { $0.name.hasPrefix("Payload/") && $0.name.hasSuffix(".app/Info.plist") }),
+              let plistData = extractEntryData(bytes: bytes, entry: plistEntry),
+              let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any],
+              let execName = plist["CFBundleExecutable"] as? String else { return nil }
+        let prefix = String(plistEntry.name.dropLast("Info.plist".count))
+        guard let execEntry = entries.first(where: { $0.name == prefix + execName }),
+              let execData = extractEntryData(bytes: bytes, entry: execEntry) else { return nil }
+        let b = [UInt8](execData)
+        guard b.count >= 32 else { return nil }
+        var sliceOffset = 0
+        if b[0] == 0xCA && b[1] == 0xFE && b[2] == 0xBA && b[3] == 0xBE, b.count >= 16 {
+            sliceOffset = Int(b[8]) << 24 | Int(b[9]) << 16 | Int(b[10]) << 8 | Int(b[11])
+        }
+        guard sliceOffset + 32 <= b.count else { return nil }
+        let header = Array(b[sliceOffset..<min(sliceOffset + 8192, b.count)])
+        return Self.machOCodeSignatureSize(header) > 0
+    }
+
     private func readMetadataViaUnzip(ipaURL: URL) -> (appName: String?, bundleID: String?, version: String?) {
         let fm = FileManager.default
         let tempDir = fm.temporaryDirectory.appendingPathComponent("readmeta-\(UUID().uuidString)")
@@ -420,77 +568,243 @@ class IPASigner {
         return (nil, nil, nil)
     }
 
+    /// Central-directory metadata reader: real entry sizes come from the ZIP
+    /// index, never the local headers — streaming-written IPAs (ReGram and
+    /// other sanitized releases) leave local sizes at 0 with a data
+    /// descriptor, which broke the previous local-header walk and left the
+    /// Sign form sitting on its MyApp defaults.
     private func readMetadataFast(ipaURL: URL) -> (appName: String?, bundleID: String?, version: String?)? {
-        do {
-            let data = try Data(contentsOf: ipaURL)
-            let bytes = [UInt8](data)
-            var offset = 0
-            
-            while offset + 30 < bytes.count {
-                guard bytes[offset] == 0x50 && bytes[offset+1] == 0x4B &&
-                      bytes[offset+2] == 0x03 && bytes[offset+3] == 0x04 else {
-                    break
-                }
-                
-                let method = UInt16(bytes[offset+8]) | (UInt16(bytes[offset+9]) << 8)
-                let compSize = UInt32(bytes[offset+18]) | (UInt32(bytes[offset+19]) << 8) |
-                              (UInt32(bytes[offset+20]) << 16) | (UInt32(bytes[offset+21]) << 24)
-                let uncompSize = UInt32(bytes[offset+22]) | (UInt32(bytes[offset+23]) << 8) |
-                                 (UInt32(bytes[offset+24]) << 16) | (UInt32(bytes[offset+25]) << 24)
-                let nameLen = Int(UInt16(bytes[offset+26]) | (UInt16(bytes[offset+27]) << 8))
-                let extraLen = Int(UInt16(bytes[offset+28]) | (UInt16(bytes[offset+29]) << 8))
-                
-                let nameStart = offset + 30
-                let nameEnd = nameStart + nameLen
-                guard nameEnd <= bytes.count else { break }
-                
-                let nameData = Data(bytes[nameStart..<nameEnd])
-                guard let name = String(data: nameData, encoding: .utf8) else {
-                    offset = nameEnd + extraLen + Int(compSize)
-                    continue
-                }
-                
-                // Look for Payload/*.app/Info.plist
-                if name.hasPrefix("Payload/") && name.hasSuffix(".app/Info.plist") {
-                    let dataStart = nameEnd + extraLen
-                    let dataEnd = dataStart + Int(compSize)
-                    guard dataEnd <= bytes.count else { break }
-                    
-                    let plistData: Data
-                    if method == 0 {
-                        plistData = Data(bytes[dataStart..<dataEnd])
-                    } else if method == 8 {
-                        let compData = Data(bytes[dataStart..<dataEnd])
-                        plistData = try inflate(data: compData, expectedSize: Int(uncompSize))
-                    } else {
-                        break
-                    }
-                    
-                    if let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any] {
-                        let appName = (plist["CFBundleDisplayName"] as? String) ?? (plist["CFBundleName"] as? String)
-                        let bundleID = plist["CFBundleIdentifier"] as? String
-                        let version = plist["CFBundleShortVersionString"] as? String
-                        return (appName, bundleID, version)
-                    }
-                    break
-                }
-                
-                offset = nameEnd + extraLen + Int(compSize)
-            }
-        } catch {
-            // Silently fail, return nils
-        }
-        return (nil, nil, nil)
+        guard let data = try? Data(contentsOf: ipaURL) else { return nil }
+        let bytes = [UInt8](data)
+        guard let entries = parseCentralDirectory(bytes),
+              let entry = entries.first(where: { $0.name.hasPrefix("Payload/") && $0.name.hasSuffix(".app/Info.plist") }),
+              let plistData = extractEntryData(bytes: bytes, entry: entry),
+              let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any] else { return nil }
+        let appName = (plist["CFBundleDisplayName"] as? String) ?? (plist["CFBundleName"] as? String)
+        return (appName, plist["CFBundleIdentifier"] as? String, plist["CFBundleShortVersionString"] as? String)
     }
-    
+
+    /// App icon for the imported IPA — shown in the Sign form now and made
+    /// for the future IPA library. Resolves CFBundlePrimaryIcon file names
+    /// from Info.plist, tries @3x/@2x/plain at the .app root, and returns
+    /// displayable PNG data. CgBI-crushed icons (stock App Store IPAs) are
+    /// normalized back to standard PNGs first.
+    func readIconData(ipaURL: URL) -> Data? {
+        guard let data = try? Data(contentsOf: ipaURL) else { return nil }
+        let bytes = [UInt8](data)
+        guard let entries = parseCentralDirectory(bytes),
+              let plistEntry = entries.first(where: { $0.name.hasPrefix("Payload/") && $0.name.hasSuffix(".app/Info.plist") }),
+              let plistData = extractEntryData(bytes: bytes, entry: plistEntry),
+              let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any] else { return nil }
+        let prefix = String(plistEntry.name.dropLast("Info.plist".count))
+        var bases: [String] = []
+        if let icons = plist["CFBundleIcons"] as? [String: Any],
+           let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+           let files = primary["CFBundleIconFiles"] as? [String] { bases = files }
+        if bases.isEmpty, let files = plist["CFBundleIconFiles"] as? [String] { bases = files }
+        var candidates: [String] = []
+        for base in bases.reversed() {
+            if base.hasSuffix("@2x") || base.hasSuffix("@3x") {
+                candidates.append(prefix + base + ".png")
+            } else {
+                candidates.append(prefix + base + "@3x.png")
+                candidates.append(prefix + base + "@2x.png")
+                candidates.append(prefix + base + ".png")
+            }
+        }
+        candidates.append(prefix + "AppIcon60x60@3x.png")
+        candidates.append(prefix + "AppIcon60x60@2x.png")
+        candidates.append(prefix + "Icon-60@2x.png")
+        candidates.append(prefix + "Icon@2x.png")
+        candidates.append(prefix + "Icon.png")
+        for name in candidates {
+            if let e = entries.first(where: { $0.name == name }),
+               let png = extractEntryData(bytes: bytes, entry: e),
+               let normalized = Self.normalizedPNG(png) {
+                return normalized
+            }
+        }
+        // Fallback: some apps (FileBrowser Pro, 2026-10-21) declare no
+        // usable icon names — scan the .app ROOT for any icon-like PNG
+        // and take the best (60x60 first, then @3x, then largest file).
+        let rootIcons = entries.filter { e in
+            e.name.hasPrefix(prefix) && e.name.hasSuffix(".png") &&
+            !e.name.dropFirst(prefix.count).contains("/") &&
+            e.name.lowercased().contains("icon")
+        }
+        let scored = rootIcons.sorted { a, b in
+            func score(_ e: ZipEntry) -> (Int, Int, UInt32) {
+                let n = e.name.lowercased()
+                return (n.contains("60x60") ? 0 : 1, n.contains("@3x") ? 0 : 1, UInt32.max - e.uncompSize)
+            }
+            return score(a) < score(b)
+        }
+        for e in scored {
+            if let png = extractEntryData(bytes: bytes, entry: e),
+               let normalized = Self.normalizedPNG(png) {
+                return normalized
+            }
+        }
+        return nil
+    }
+
+    /// Converts an Apple CgBI PNG into a standard PNG. Standard PNGs pass
+    /// through unchanged. CgBI differences: an extra CgBI chunk, IDAT is
+    /// RAW deflate, pixels are premultiplied BGRA, no inter-filter zlib
+    /// wrapper. Returns nil when the data cannot be normalized.
+    private static func normalizedPNG(_ data: Data) -> Data? {
+        let bytes = [UInt8](data)
+        guard bytes.count > 24,
+              bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47 else { return nil }
+        guard String(bytes: bytes[12..<16], encoding: .ascii) == "CgBI" else { return data }
+        // Parse chunks
+        var off = 8
+        var width = 0, height = 0, colorType: UInt8 = 0, bitDepth: UInt8 = 0
+        var idat = Data()
+        var others: [(type: String, payload: [UInt8])] = []
+        while off + 12 <= bytes.count {
+            let len = Int(readU32BE(bytes, off))
+            guard off + 12 + len <= bytes.count else { return nil }
+            let type = String(bytes: bytes[(off+4)..<(off+8)], encoding: .ascii) ?? ""
+            let payload = Array(bytes[(off+8)..<(off+8+len)])
+            switch type {
+            case "IHDR":
+                guard len == 13 else { return nil }
+                width = Int(readU32BE(payload, 0)); height = Int(readU32BE(payload, 4))
+                bitDepth = payload[8]; colorType = payload[9]
+            case "IDAT":
+                idat.append(contentsOf: payload)
+            case "CgBI", "IEND", "iDOT":
+                break
+            default:
+                others.append((type, payload))
+            }
+            off += 12 + len
+            if type == "IEND" { break }
+        }
+        guard width > 0, height > 0, bitDepth == 8, colorType == 6 else { return nil }
+        let stride = width * 4
+        guard let raw = try? Self.inflate(data: idat, expectedSize: (stride + 1) * height),
+              raw.count == (stride + 1) * height else { return nil }
+        let rb = [UInt8](raw)
+        var out = [UInt8]()
+        out.reserveCapacity(rb.count)
+        var prev = [UInt8](repeating: 0, count: stride)
+        for y in 0..<height {
+            let rowStart = y * (stride + 1)
+            let filter = rb[rowStart]
+            var row = Array(rb[(rowStart + 1)..<(rowStart + 1 + stride)])
+            // Undo the PNG row filter (bpp = 4)
+            switch filter {
+            case 0: break
+            case 1:
+                for i in 4..<stride { row[i] = row[i] &+ row[i - 4] }
+            case 2:
+                for i in 0..<stride { row[i] = row[i] &+ prev[i] }
+            case 3:
+                for i in 0..<stride {
+                    let left: Int = i >= 4 ? Int(row[i - 4]) : 0
+                    row[i] = row[i] &+ UInt8((left + Int(prev[i])) / 2)
+                }
+            case 4:
+                for i in 0..<stride {
+                    let a: Int = i >= 4 ? Int(row[i - 4]) : 0
+                    let b: Int = Int(prev[i])
+                    let c: Int = i >= 4 ? Int(prev[i - 4]) : 0
+                    row[i] = row[i] &+ paethPredictor(a, b, c)
+                }
+            default: return nil
+            }
+            // BGRA premultiplied -> RGBA straight alpha
+            var rgba = [UInt8](repeating: 0, count: stride)
+            for px in 0..<(stride / 4) {
+                let o = px * 4
+                let b = row[o], g = row[o + 1], r = row[o + 2], a = row[o + 3]
+                rgba[o + 3] = a
+                if a == 255 {
+                    rgba[o] = r; rgba[o + 1] = g; rgba[o + 2] = b
+                } else if a > 0 {
+                    rgba[o]     = UInt8(min(255, Int(r) * 255 / Int(a)))
+                    rgba[o + 1] = UInt8(min(255, Int(g) * 255 / Int(a)))
+                    rgba[o + 2] = UInt8(min(255, Int(b) * 255 / Int(a)))
+                }
+            }
+            out.append(0) // filter: none
+            out.append(contentsOf: rgba)
+            prev = row
+        }
+        // Re-encode as the most vanilla standard PNG possible: IHDR +
+        // IDAT + IEND only (ancillary chunks from the crushed original —
+        // gAMA/eXIf/iDOT and friends — are NOT carried over; one of them
+        // made ImageIO reject the file on device even though the pixel
+        // pipeline was byte-perfect, proven by a Linux harness running
+        // this exact code). The zlib stream comes from the vendored zlib
+        // (bb_zlib_compress), not the Compression framework.
+        var dst = [UInt8](repeating: 0, count: out.count + 1024)
+        var written: Int = 0
+        let encRc: Int32 = out.withUnsafeBufferPointer { srcPtr -> Int32 in
+            dst.withUnsafeMutableBufferPointer { dstPtr -> Int32 in
+                var outLen: UInt = 0
+                let rc = bb_zlib_compress(srcPtr.baseAddress!, UInt(out.count),
+                                          dstPtr.baseAddress!, UInt(dstPtr.count), &outLen)
+                written = Int(outLen)
+                return rc
+            }
+        }
+        guard encRc == 0, written > 0 else { return nil }
+        var png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        var ihdr = [UInt8]()
+        ihdr.append(contentsOf: u32beBytes(UInt32(width)))
+        ihdr.append(contentsOf: u32beBytes(UInt32(height)))
+        ihdr.append(contentsOf: [8, 6, 0, 0, 0])
+        appendPNGChunk(&png, type: "IHDR", payload: ihdr)
+        appendPNGChunk(&png, type: "IDAT", payload: Array(dst[0..<written]))
+        appendPNGChunk(&png, type: "IEND", payload: [])
+        return png
+    }
+
+    private static func readU32BE(_ bytes: [UInt8], _ off: Int) -> UInt32 {
+        guard off + 3 < bytes.count else { return 0 }
+        return UInt32(bytes[off]) << 24 | UInt32(bytes[off + 1]) << 16 | UInt32(bytes[off + 2]) << 8 | UInt32(bytes[off + 3])
+    }
+
+    private static func u32beBytes(_ v: UInt32) -> [UInt8] {
+        [UInt8((v >> 24) & 0xff), UInt8((v >> 16) & 0xff), UInt8((v >> 8) & 0xff), UInt8(v & 0xff)]
+    }
+
+    private static func paethPredictor(_ a: Int, _ b: Int, _ c: Int) -> UInt8 {
+        let p = a + b - c
+        let pa = abs(p - a), pb = abs(p - b), pc = abs(p - c)
+        if pa <= pb && pa <= pc { return UInt8(a) }
+        if pb <= pc { return UInt8(b) }
+        return UInt8(c)
+    }
+
+    private static func appendPNGChunk(_ png: inout Data, type: String, payload: [UInt8]) {
+        var chunk = Data()
+        chunk.append(contentsOf: u32beBytes(UInt32(payload.count)))
+        let typeBytes = [UInt8](type.utf8)
+        chunk.append(contentsOf: typeBytes)
+        chunk.append(contentsOf: payload)
+        var crcData = Data(typeBytes)
+        crcData.append(contentsOf: payload)
+        chunk.append(contentsOf: u32beBytes(Self.crc32(crcData)))
+        png.append(chunk)
+    }
+
     // MARK: - ZIP utilities (minimal implementation)
-    private func unzip(ipaURL: URL, to destDir: URL) throws {
+    // Cooperative cancellation for the sign pipeline (set from the UI's
+    // Cancel button; checked between phases and inside the unzip loop).
+    private var signCancelRequested = false
+    func cancelCurrentSign() { signCancelRequested = true }
+
+    private func unzip(ipaURL: URL, to destDir: URL, cancelCheck: (() -> Bool)? = nil, progress: ((String) -> Void)? = nil) throws {
         // Use Compression framework for deflate, manually parse ZIP structure
         let data = try Data(contentsOf: ipaURL)
-        try unzipData(data, to: destDir)
+        try unzipData(data, to: destDir, cancelCheck: cancelCheck, progress: progress)
     }
     
-    private func unzipData(_ data: Data, to destDir: URL) throws {
+    private func unzipData(_ data: Data, to destDir: URL, cancelCheck: (() -> Bool)? = nil, progress: ((String) -> Void)? = nil) throws {
         // Central-directory driven parser — handles data descriptors (general
         // purpose bit 3), which GitHub Actions artifact ZIPs use. Local-header
         // sizes are ignored; real sizes come from the central directory.
@@ -498,7 +812,14 @@ class IPASigner {
         guard let entries = parseCentralDirectory(bytes), !entries.isEmpty else {
             throw SignError.corruptZip
         }
-        for entry in entries {
+        var madeDirs = Set<String>()
+        for (entryIndex, entry) in entries.enumerated() {
+            if entryIndex % 500 == 0, entryIndex > 0 {
+                progress?("Unzipping IPA... (\(entryIndex)/\(entries.count) files)")
+            }
+            if entryIndex % 16 == 0, cancelCheck?() == true {
+                throw SignError.signingFailed("Cancelled by user")
+            }
             if entry.name.hasSuffix("/") { continue } // directory entry
             if entry.name.contains("..") { continue } // path traversal guard
             let lh = entry.localHeaderOffset
@@ -516,14 +837,20 @@ class IPASigner {
             }
 
             let fileURL = destDir.appendingPathComponent(entry.name)
-            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
-                                                   withIntermediateDirectories: true)
+            // Create each directory once — with ~6,000 files in few folders,
+            // a createDirectory per file was a real cost on device.
+            let dirPath = fileURL.deletingLastPathComponent().path
+            if !madeDirs.contains(dirPath) {
+                try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                       withIntermediateDirectories: true)
+                madeDirs.insert(dirPath)
+            }
             let fileData: Data
             if entry.method == 0 { // Stored
                 fileData = Data(bytes[dataStart..<dataEnd])
             } else if entry.method == 8 { // Deflated
                 let compData = Data(bytes[dataStart..<dataEnd])
-                fileData = try inflate(data: compData, expectedSize: Int(entry.uncompSize))
+                fileData = try Self.inflate(data: compData, expectedSize: Int(entry.uncompSize))
             } else {
                 throw SignError.unsupportedCompression
             }
@@ -592,58 +919,161 @@ class IPASigner {
         return entries
     }
     
-    private func inflate(data: Data, expectedSize: Int) throws -> Data {
-        // Pure Swift DEFLATE decoder (RFC 1951) — reliable, no framework quirks
+    private static func inflate(data: Data, expectedSize: Int) throws -> Data {
         guard !data.isEmpty else { throw SignError.corruptZip }
+        // Primary engine: the real zlib in C (vendored inside zsign,
+        // exposed via bb_inflate_raw). A Linux harness mirroring this exact
+        // pipeline inflated all 680 MB of the Instagram IPA in 4.8 s total.
+        // The Compression-framework stream below never reliably engaged on
+        // device and the pure-Swift decoder runs at ~0.2 MB/s — together
+        // they caused every large-IPA stall of 2026-10-21.
+        if let c = Self.inflateC(data: data, expectedSize: expectedSize) {
+            return c
+        }
+        if let fast = Self.inflateFast(data: data, expectedSize: expectedSize) {
+            return fast
+        }
         let decoder = DeflateDecoder(data: data)
         let result = try decoder.decode()
         guard result.count == expectedSize else { throw SignError.corruptZip }
         return result
     }
-    // CRC32 (IEEE 802.3) for ZIP
-    private func crc32(_ data: Data) -> UInt32 {
+
+    // Raw-DEFLATE compression through the vendored zlib (bbinflate.c).
+    private static func deflateC(data: Data) -> Data? {
+        let cap = data.count + data.count / 8 + 1024
+        var out = Data(count: cap)
+        var outLen: UInt = 0
+        let rc = out.withUnsafeMutableBytes { dst -> Int32 in
+            data.withUnsafeBytes { src -> Int32 in
+                bb_deflate_raw(src.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt(data.count),
+                               dst.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt(cap), &outLen)
+            }
+        }
+        guard rc == 0, outLen > 0 else { return nil }
+        return out.prefix(Int(outLen))
+    }
+
+    // Raw-DEFLATE inflate through the vendored zlib (bbinflate.c).
+    private static func inflateC(data: Data, expectedSize: Int) -> Data? {
+        guard expectedSize > 0 else { return Data() }
+        var out = Data(count: expectedSize)
+        var outLen: UInt = 0
+        let rc = out.withUnsafeMutableBytes { dst -> Int32 in
+            data.withUnsafeBytes { src -> Int32 in
+                bb_inflate_raw(src.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt(data.count),
+                               dst.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt(expectedSize), &outLen)
+            }
+        }
+        guard rc == 0, Int(outLen) == expectedSize else { return nil }
+        return out
+    }
+
+    private static func inflateFast(data: Data, expectedSize: Int) -> Data? {
+        var wrapped = Data([0x78, 0x01])
+        wrapped.append(data)
+        wrapped.append(contentsOf: [0, 0, 0, 1])
+        let srcBytes = [UInt8](wrapped)
+        var output = [UInt8]()
+        output.reserveCapacity(expectedSize)
+        let chunkSize = 1 << 16
+        var dst = [UInt8](repeating: 0, count: chunkSize)
+        return srcBytes.withUnsafeBufferPointer { srcBuf in
+            dst.withUnsafeMutableBufferPointer { dstBuf in
+                var stream = compression_stream(dst_ptr: dstBuf.baseAddress!, dst_size: 0,
+                                                src_ptr: srcBuf.baseAddress!, src_size: 0,
+                                                state: nil)
+                guard compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else { return nil }
+                defer { compression_stream_destroy(&stream) }
+                stream.src_ptr = srcBuf.baseAddress!
+                stream.src_size = srcBuf.count
+                while true {
+                    stream.dst_ptr = dstBuf.baseAddress!
+                    stream.dst_size = chunkSize
+                    // Once all input is fed, FINALIZE is required or the
+                    // decoder never reports END — without it, large streams
+                    // stalled here, got discarded, and the whole file fell
+                    // back to the slow Swift decoder (the 2026-10-21
+                    // Instagram unzip stall). Small files never noticed.
+                    let flags: Int32 = stream.src_size == 0 ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
+                    let status = compression_stream_process(&stream, flags)
+                    let produced = chunkSize - stream.dst_size
+                    if produced > 0 {
+                        output.append(contentsOf: UnsafeBufferPointer(start: dstBuf.baseAddress!, count: produced))
+                    }
+                    if status == COMPRESSION_STATUS_END { break }
+                    if status == COMPRESSION_STATUS_ERROR {
+                        // Trailer (adler) mismatch can surface as an error
+                        // after all output was produced — accept exact size.
+                        return output.count == expectedSize ? Data(output) : nil
+                    }
+                    if status != COMPRESSION_STATUS_OK { return nil }
+                    if stream.src_size == 0 && produced == 0 && flags != 0 { return nil }
+                }
+                return output.count == expectedSize ? Data(output) : nil
+            }
+        }
+    }
+
+    // CRC32 (IEEE 802.3) for ZIP — table-driven (the bit-by-bit version was
+    // a second bottleneck on large IPAs)
+    private static let crcTable: [UInt32] = (0..<256).map { i -> UInt32 in
+        var c = UInt32(i)
+        for _ in 0..<8 { c = (c & 1) != 0 ? (c >> 1) ^ 0xEDB88320 : c >> 1 }
+        return c
+    }
+
+    private static func crc32(_ data: Data) -> UInt32 {
         var crc: UInt32 = 0xFFFFFFFF
         for byte in data {
-            crc ^= UInt32(byte)
-            for _ in 0..<8 {
-                crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1
-            }
+            crc = Self.crcTable[Int((crc ^ UInt32(byte)) & 0xFF)] ^ (crc >> 8)
         }
         return crc ^ 0xFFFFFFFF
     }
 
     private func zip(sourceDir: URL, to destURL: URL) throws {
-        // Minimal ZIP writer (stored only for simplicity, or deflated)
-        // For now, use stored (no compression) to keep it simple
+        // ZIP writer: files >= 16 KB are DEFLATED via the vendored zlib
+        // (bb_deflate_raw); smaller files are stored. This writer used to
+        // store everything, which nearly doubled signed-IPA sizes in the
+        // library (a 350 MB IPA became 684 MB — spotted in Miguel's
+        // 2026-10-21 video). Deflate level 6 via C costs seconds, not
+        // minutes, thanks to the harness-verified engine.
         var zipData = Data()
-        var centralDir: [(name: String, offset: UInt32, size: UInt32, crc: UInt32)] = []
-        
+        var centralDir: [(name: String, offset: UInt32, compSize: UInt32, size: UInt32, crc: UInt32, method: UInt16)] = []
+
         let enumerator = FileManager.default.enumerator(at: sourceDir, includingPropertiesForKeys: [.isRegularFileKey])
         while let file = enumerator?.nextObject() as? URL {
             let isDir = (try? file.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
             if isDir { continue }
-            
+
             let relPath = file.path.replacingOccurrences(of: sourceDir.path + "/", with: "")
             let fileData = try Data(contentsOf: file)
-            let crc = crc32(fileData)
-            
+            let crc = Self.crc32(fileData)
+
+            var storedData = fileData
+            var method: UInt16 = 0
+            if fileData.count >= 16384, let deflated = Self.deflateC(data: fileData), deflated.count < fileData.count {
+                storedData = deflated
+                method = 8
+            }
+
             let offset = UInt32(zipData.count)
-            
+
             // Local file header
             zipData.append(contentsOf: [0x50, 0x4B, 0x03, 0x04]) // Signature
             zipData.append(contentsOf: [0x14, 0x00]) // Version
             zipData.append(contentsOf: [0x00, 0x00]) // Flags
-            zipData.append(contentsOf: [0x00, 0x00]) // Method: stored
+            appendUInt16(&zipData, method) // Method: 0 stored, 8 deflated
             zipData.append(contentsOf: [0x00, 0x00, 0x00, 0x00]) // Time/date
             appendUInt32(&zipData, crc) // CRC32 (real)
-            appendUInt32(&zipData, UInt32(fileData.count)) // Compressed size
+            appendUInt32(&zipData, UInt32(storedData.count)) // Compressed size
             appendUInt32(&zipData, UInt32(fileData.count)) // Uncompressed size
             appendUInt16(&zipData, UInt16(relPath.utf8.count)) // Name length
             appendUInt16(&zipData, 0) // Extra length
             zipData.append(contentsOf: relPath.utf8)
-            zipData.append(fileData)
-            
-            centralDir.append((relPath, offset, UInt32(fileData.count), crc))
+            zipData.append(storedData)
+
+            centralDir.append((relPath, offset, UInt32(storedData.count), UInt32(fileData.count), crc, method))
         }
         
         let centralStart = UInt32(zipData.count)
@@ -651,11 +1081,11 @@ class IPASigner {
             zipData.append(contentsOf: [0x50, 0x4B, 0x01, 0x02]) // Signature
             zipData.append(contentsOf: [0x14, 0x00, 0x14, 0x00]) // Versions
             zipData.append(contentsOf: [0x00, 0x00]) // Flags
-            zipData.append(contentsOf: [0x00, 0x00]) // Method: stored
+            appendUInt16(&zipData, entry.method) // Method: 0 stored, 8 deflated
             zipData.append(contentsOf: [0x00, 0x00]) // Mod time
             zipData.append(contentsOf: [0x00, 0x00]) // Mod date
             appendUInt32(&zipData, entry.crc) // CRC32 (real)
-            appendUInt32(&zipData, entry.size)
+            appendUInt32(&zipData, entry.compSize)
             appendUInt32(&zipData, entry.size)
             appendUInt16(&zipData, UInt16(entry.name.utf8.count))
             appendUInt16(&zipData, 0) // Extra field length

@@ -99,6 +99,8 @@ struct CompileView: View {
     @State private var ipaURL: URL?
     @State private var showingImporter = false
     @State private var projectName = ""
+    @State private var projectNameIsAuto = true
+    @State private var lastAutoName = ""
     @State private var buildLog = ""
     @State private var showingLog = false
     @State private var githubConnected = false
@@ -110,6 +112,7 @@ struct CompileView: View {
     @State private var githubTokenInput = ""
     @State private var shareItem: ShareItem?
     @State private var showingDisconnectConfirm = false
+    @State private var showingClearLogConfirm = false
     @State private var shareURL: URL?
 
     // Handoff to the Sign tab: set pendingSignIpa, then flip selectedTab to Sign
@@ -190,6 +193,10 @@ struct CompileView: View {
                     TextField("Input your project name", text: $projectName)
                         .textFieldStyle(.roundedBorder)
                         .font(.subheadline)
+                        .onChange(of: projectName) { newValue in
+                            // A manual edit wins: stop auto-filling
+                            if newValue != lastAutoName { projectNameIsAuto = false }
+                        }
                 }
                 .padding(.horizontal)
                 .padding(.top, 8)
@@ -224,6 +231,11 @@ struct CompileView: View {
                 } else {
                     TextEditor(text: $sourceCode)
                         .font(.system(.body, design: .monospaced))
+                        .onChange(of: sourceCode) { _ in
+                            if let name = Self.deriveName(fromSource: sourceCode) {
+                                autoFillProjectName(name)
+                            }
+                        }
                         .border(Color.gray.opacity(0.3), width: 1)
                         .cornerRadius(8)
                         .padding(.horizontal)
@@ -299,13 +311,21 @@ struct CompileView: View {
                                 UIPasteboard.general.string = buildLog
                                 compileStatus = "Log copied to clipboard"
                             }
-                            .buttonStyle(PressableSmallGreenButtonStyle())
+                            .buttonStyle(PressableSmallBlueButtonStyle())
                             .frame(maxWidth: .infinity)
                         }
                         Button("Clear") {
-                            clearCompileState()
+                            showingClearLogConfirm = true
                         }
                         .buttonStyle(PressableSmallRedButtonStyle())
+                        .alert("Clear Build Log?", isPresented: $showingClearLogConfirm) {
+                            Button("Yes", role: .destructive) {
+                                clearCompileState()
+                            }
+                            Button("Cancel", role: .cancel) { }
+                        } message: {
+                            Text("Are you sure you want to clear the build log and the compiled IPA?")
+                        }
                         .frame(maxWidth: .infinity)
                     }
                     .padding(.horizontal)
@@ -454,6 +474,39 @@ struct CompileView: View {
         }.resume()
     }
     
+    // MARK: - Project name auto-fill (from the ZIP or the source itself)
+
+    private func autoFillProjectName(_ candidate: String) {
+        let clean = candidate.trimmingCharacters(in: .whitespaces)
+        guard projectNameIsAuto, !clean.isEmpty else { return }
+        lastAutoName = clean
+        projectName = clean
+    }
+
+    /// "CycleTest-source.zip" / "CycleTest source ZIP.zip" -> "CycleTest"
+    static func deriveName(fromZipName name: String) -> String {
+        let base = (name as NSString).deletingPathExtension
+        var tokens = base.split(whereSeparator: { $0 == " " || $0 == "-" || $0 == "_" }).map(String.init)
+        let junk: Set<String> = ["zip", "source", "src"]
+        while let last = tokens.last, junk.contains(last.lowercased()) {
+            tokens.removeLast()
+        }
+        return tokens.joined(separator: " ")
+    }
+
+    /// "@main struct CycleTestApp: App" -> "CycleTest"
+    static func deriveName(fromSource code: String) -> String? {
+        let pattern = #"struct\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*App"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: code, range: NSRange(code.startIndex..., in: code)),
+              let range = Range(match.range(at: 1), in: code) else { return nil }
+        var name = String(code[range])
+        if name.hasSuffix("App"), name.count > 3 {
+            name = String(name.dropLast(3))
+        }
+        return name
+    }
+
     private func handleImport(_ urls: [URL]) {
         for url in urls {
             if url.pathExtension == "swift" {
@@ -465,6 +518,7 @@ struct CompileView: View {
                 sourceZipURL = url
                 sourceZipName = url.lastPathComponent
                 compileStatus = "ZIP ready: \(url.lastPathComponent)"
+                autoFillProjectName(Self.deriveName(fromZipName: url.lastPathComponent))
                 return
             }
         }
@@ -484,6 +538,8 @@ struct CompileView: View {
         sourceZipURL = nil
         sourceZipName = ""
         projectName = ""
+        projectNameIsAuto = true
+        lastAutoName = ""
     }
     
     private func startDots() {
