@@ -12,6 +12,7 @@ Compile on GitHub, sign on-device with your certificate, install. BuildBox runs 
 - **On-device install** — install signed apps directly from the app over local HTTPS. No ESign, no computer.
 - **Library tab** — every signed IPA lives in its own library: search, share, install or remove with a swipe.
 - **Edit before you sign** — change the app name, bundle ID or version in the Sign tab.
+- **Dylib injection** — attach .dylib files in the Sign tab; BuildBox injects them into the IPA (LC_LOAD_DYLIB) and signs everything with your certificate, on-device. No jailbreak, no computer.
 - **Brand-new icon.**
 
 v1.0.0 could only compile. 2.0.0 finishes the job.
@@ -33,7 +34,7 @@ v1.0.0 could only compile. 2.0.0 finishes the job.
 ## The tabs
 
 - **Compile** — write or import a Swift project, send it to your GitHub repo, watch the build, get the unsigned IPA back.
-- **Sign** — import any IPA (yours, or one from anywhere), edit its name / bundle ID / version, sign it with your certificate.
+- **Sign** — import any IPA (yours, or one from anywhere), edit its name / bundle ID / version, optionally inject .dylib files, and sign it with your certificate.
 - **Library** — your signed IPAs, kept on-device. Swipe right to share, swipe left to install or remove, long-press for the menu.
 - **About** — developer info, socials, support the project.
 
