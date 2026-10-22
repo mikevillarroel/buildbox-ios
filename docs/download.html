@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Download — MikeBuildsApp</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #060d1f;
+    color: #eef2f9;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .dl-inner {
+    width: 100%;
+    max-width: 430px;
+    padding: 48px 24px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    flex: 1;
+  }
+  .dl-brand {
+    letter-spacing: 0.35em;
+    font-size: 12px;
+    font-weight: 700;
+    color: #7f8fb0;
+    margin-bottom: 28px;
+  }
+  .dl-icon {
+    width: 118px;
+    height: 118px;
+    border-radius: 27px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  }
+  .dl-name { font-size: 34px; font-weight: 800; margin-top: 20px; }
+  .dl-version { color: #93a5c4; font-size: 16px; margin-top: 4px; }
+  .dl-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 18px;
+    padding: 18px 20px;
+    margin-top: 28px;
+    width: 100%;
+    text-align: left;
+  }
+  .dl-card-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #7f8fb0;
+    margin-bottom: 10px;
+  }
+  .dl-notes { list-style: none; }
+  .dl-notes li {
+    font-size: 15px;
+    line-height: 1.45;
+    padding: 4px 0 4px 18px;
+    position: relative;
+    color: #d7dfef;
+  }
+  .dl-notes li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 12px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #2f7df6;
+  }
+  .dl-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    margin-top: 28px;
+    padding: 17px 20px;
+    background: #1f6bff;
+    color: #fff;
+    font-size: 18px;
+    font-weight: 700;
+    border-radius: 16px;
+    text-decoration: none;
+    box-shadow: 0 12px 28px rgba(31, 107, 255, 0.35);
+  }
+  .dl-btn:active { transform: scale(0.98); }
+  .dl-btn svg { width: 22px; height: 22px; }
+  .dl-meta { color: #7f8fb0; font-size: 13px; margin-top: 14px; }
+  .dl-sign { color: #aeb9cf; font-size: 14px; line-height: 1.5; margin-top: 22px; }
+  .dl-sign strong { color: #fff; }
+  .dl-sign .line2 { display: block; margin-top: 4px; color: #7f8fb0; font-size: 13px; }
+  .dl-back { color: #6f87b8; font-size: 14px; text-decoration: none; margin-top: 28px; }
+  .dl-foot { color: #55688c; font-size: 12.5px; padding: 18px; text-align: center; }
+  .dl-foot a { color: #7f9cc4; text-decoration: none; }
+</style>
+</head>
+<body>
+  <main class="dl-inner">
+    <p class="dl-brand">MIKEBUILDS</p>
+    <img class="dl-icon" id="dl-icon" src="assets/buildbox-icon.png" alt="App icon" />
+    <h1 class="dl-name" id="dl-name">BuildBox</h1>
+    <p class="dl-version" id="dl-version">Version 2.0.1</p>
+    <div class="dl-card">
+      <p class="dl-card-label">What's new</p>
+      <ul class="dl-notes" id="dl-notes"></ul>
+    </div>
+    <a class="dl-btn" id="dl-btn" href="https://github.com/mikevillarroel/buildbox-ios/releases/latest" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0 5-5m-5 5-5-5"/><path d="M4 20h16"/></svg>
+      Download IPA
+    </a>
+    <p class="dl-meta" id="dl-meta"></p>
+    <p class="dl-sign">
+      Unsigned IPA — sign it with <strong>BuildBox</strong>, ESign, SideStore or AltStore.
+      <span class="line2" id="dl-sign-2">Or open it in BuildBox and let it sign &amp; install itself.</span>
+    </p>
+    <a class="dl-back" href="https://muse.ai/s/miguel-villarroel-apps-xxxy64czmxe8nn">&#8592; Back to all apps</a>
+  </main>
+  <div class="dl-foot">Made by Miguel Villarroel &middot; <a href="https://x.com/MikeBuildsApp" target="_blank" rel="noopener">@MikeBuildsApp</a></div>
+
+<script>
+(function () {
+  var APPS = {
+    buildbox: {
+      name: "BuildBox",
+      icon: "assets/buildbox-icon.png",
+      version: "2.0.1",
+      size: "17 MB",
+      minOS: "iOS 17+",
+      ipa: "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.0.1/BuildBox-2.0.1.ipa",
+      fallback: "https://github.com/mikevillarroel/buildbox-ios/releases/latest",
+      notes: [
+        "In-app update alerts — new versions show up right on the splash screen",
+        "Same on-device signing & install from 2.0.0",
+        "Bug fixes"
+      ],
+      selfSign: true
+    },
+    layers: {
+      name: "Layers",
+      icon: "assets/buildbox-icon.png",
+      version: "1.0.0",
+      size: "",
+      minOS: "",
+      ipa: "",
+      fallback: "https://github.com/mikevillarroel/layers/releases/latest",
+      notes: [
+        "Icon Borders, Dock Tint and Depth Shadows",
+        "Screenshot calibration for your exact icon grid",
+        "First release"
+      ],
+      selfSign: false
+    },
+    tendiemaker: {
+      name: "TendieMaker",
+      icon: "assets/buildbox-icon.png",
+      version: "1.0.4",
+      size: "",
+      minOS: "",
+      ipa: "",
+      fallback: "https://github.com/mikevillarroel/tendiemaker/releases/latest",
+      notes: [
+        "Gallery now pulls tendies from both community packs",
+        "Bug fixes"
+      ],
+      selfSign: false
+    }
+  };
+
+  function parseParams(str) {
+    var out = {};
+    if (!str) return out;
+    var pairs = str.split("&");
+    for (var i = 0; i < pairs.length; i++) {
+      var eq = pairs[i].indexOf("=");
+      if (eq < 0) continue;
+      try {
+        var k = decodeURIComponent(pairs[i].slice(0, eq));
+        var v = decodeURIComponent(pairs[i].slice(eq + 1).replace(/\+/g, " "));
+        out[k] = v;
+      } catch (e) { /* skip malformed pair */ }
+    }
+    return out;
+  }
+
+  var q = parseParams((location.search || "").replace(/^\?/, ""));
+  var h = parseParams((location.hash || "").replace(/^#\/?(?:download|update)\/[a-z0-9-]+\??/, ""));
+  var params = {};
+  for (var k in h) params[k] = h[k];
+  for (var k2 in q) params[k2] = q[k2];
+
+  var key = params.app || "buildbox";
+  var hm = (location.hash || "").match(/^#\/(?:download|update)\/([a-z0-9-]+)/);
+  if (hm) key = hm[1];
+  var app = APPS[key] || APPS.buildbox;
+
+  var version = params.v || params.version || app.version;
+  var file = params.file || (app.name.replace(/\s+/g, "") + "-" + version + ".ipa");
+  var notes = app.notes;
+  if (params.notes) {
+    var split = params.notes.split("|").filter(function (n) { return n.trim() !== ""; });
+    if (split.length) notes = split;
+  }
+  var ipa = params.ipa || app.ipa || "";
+  if (!/^https:\/\//.test(ipa)) ipa = app.fallback;
+
+  var icon = document.getElementById("dl-icon");
+  icon.src = app.icon;
+  icon.alt = app.name + " app icon";
+  document.getElementById("dl-name").textContent = app.name;
+  document.getElementById("dl-version").textContent = "Version " + version;
+
+  var list = document.getElementById("dl-notes");
+  notes.forEach(function (n) {
+    var li = document.createElement("li");
+    li.textContent = n;
+    list.appendChild(li);
+  });
+
+  document.getElementById("dl-btn").setAttribute("href", ipa);
+
+  var meta = [file];
+  var size = params.size || app.size;
+  if (size) meta.push(size);
+  if (app.minOS) meta.push(app.minOS);
+  document.getElementById("dl-meta").textContent = meta.join(" · ");
+
+  document.getElementById("dl-sign-2").style.display = app.selfSign ? "" : "none";
+  document.title = "Download " + app.name + " " + version + " — MikeBuildsApp";
+})();
+</script>
+</body>
+</html>
