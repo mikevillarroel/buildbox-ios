@@ -86,15 +86,15 @@ struct UpdateManifest: Decodable {
 // Launch splash (Miguel's design, 2026-10-21): the "How it works" guide
 // lives here instead of the About tab — shown when the app opens, with a
 // big blue Continue button, in the same card language as his other apps.
-// When the manifest announces a newer version (and the user hasn't
-// dismissed that version), the guide card is replaced by the update
-// card: big blue Update (opens the download page) + Dismiss (enters
-// the app and silences this version for good).
+// When the manifest announces a newer version, the guide card is
+// replaced by the update card: big blue Update (opens the download
+// page) + Dismiss (enters the app for this launch only — Miguel's
+// rule 2026-10-22: the alert comes back on EVERY open until the
+// app is actually updated, so nobody can silence it for good).
 struct SplashView: View {
     let onContinue: () -> Void
 
     @State private var update: UpdateManifest? = nil
-    @AppStorage("dismissedUpdateVersion") private var dismissedUpdateVersion = ""
 
     private var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
@@ -161,7 +161,6 @@ struct SplashView: View {
                         .padding(.top, 4)
 
                         Button("Dismiss") {
-                            dismissedUpdateVersion = u.latest_version
                             onContinue()
                         }
                         .foregroundColor(.secondary)
@@ -202,8 +201,7 @@ struct SplashView: View {
         req.cachePolicy = .reloadIgnoringLocalCacheData
         guard let (data, _) = try? await URLSession.shared.data(for: req),
               let m = try? JSONDecoder().decode(UpdateManifest.self, from: data) else { return }
-        if isVersion(m.latest_version, newerThan: currentVersion),
-           dismissedUpdateVersion != m.latest_version {
+        if isVersion(m.latest_version, newerThan: currentVersion) {
             update = m
         }
     }
