@@ -602,7 +602,7 @@ struct AboutView: View {
                             Text("BuildBox")
                                 .font(.system(size: 34, weight: .bold))
                                 .padding(.top, 14)
-                            Text("v2.0.0")
+                            Text("v2.0.1")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                                 .padding(.top, 4)

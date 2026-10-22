@@ -1,0 +1,11 @@
+{
+  "app": "BuildBox",
+  "latest_version": "2.0.1",
+  "notes": [
+    "In-app update alerts — new versions show up right on this screen",
+    "Same on-device signing & install from 2.0.0",
+    "Bug fixes"
+  ],
+  "page_url": "https://muse.ai/s/miguel-villarroel-apps-xxxy64czmxe8nn/9fOD9y7je9Iz9enkIeunf5Xj456JemhHMOkG4EAVuy8#/download/buildbox?v=2.0.1&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.0.1%2FBuildBox-2.0.1.ipa&size=17%20MB&notes=In-app%20update%20alerts%7CSame%20on-device%20signing%20%26%20install%7CBug%20fixes",
+  "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.0.1/BuildBox-2.0.1.ipa"
+}
