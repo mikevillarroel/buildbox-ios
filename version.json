@@ -1,11 +1,11 @@
 {
   "app": "BuildBox",
-  "latest_version": "2.0.1",
+  "latest_version": "2.0.2",
   "notes": [
-    "In-app update alerts — new versions show up right on this screen",
-    "Same on-device signing & install from 2.0.0",
-    "Bug fixes"
+    "Inject .deb tweaks & .zip packs on-device — right in the Sign tab",
+    "Thinned App Store IPAs now install (device restriction stripped at sign time)",
+    "Library: one-tap Install, shareable logs, and more fixes"
   ],
-  "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.0.1&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.0.1%2FBuildBox-2.0.1.ipa&size=17%20MB&notes=In-app%20update%20alerts%7CSame%20on-device%20signing%20%26%20install%7CBug%20fixes",
-  "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.0.1/BuildBox-2.0.1.ipa"
+  "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.0.2&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.0.2%2FBuildBox-2.0.2.ipa&size=17%20MB&notes=Inject%20.deb%20tweaks%20%26%20.zip%20packs%20on-device%20%E2%80%94%20right%20in%20the%20Sign%20tab%7CThinned%20App%20Store%20IPAs%20now%20install%20%28device%20restriction%20stripped%20at%20sign%20time%29%7CLibrary%3A%20one-tap%20Install%2C%20shareable%20logs%2C%20and%20more%20fixes",
+  "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.0.2/BuildBox-2.0.2.ipa"
 }
