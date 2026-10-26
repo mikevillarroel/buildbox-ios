@@ -1,11 +1,11 @@
 {
   "app": "BuildBox",
-  "latest_version": "2.0.3",
+  "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.1.0/BuildBox-2.1.0.ipa",
+  "latest_version": "2.1.0",
   "notes": [
-    "NEW tabs: Sources (browse, download, sign & install from app sources) and Add App (request an app for the catalog)",
-    "Sign tab reworked: certificate page, collapsible App Info, pinned Signature/Install, bigger log",
-    "Install now verifies a real signature before it lights up; new frosted tab bar + pro About"
+    "Catalog-first redesign: Catalog home tab, Sources as a sheet, restyled Signed tab",
+    "Signing fixed: release apps open again, catalog signing no longer closes the app",
+    "Catalog refresh, Clear All logs, matching page titles; requires iOS 18+"
   ],
-  "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.0.3&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.0.3%2FBuildBox-2.0.3.ipa&size=17%20MB&notes=NEW%20tabs%3A%20Sources%20%28browse%2C%20download%2C%20sign%20%26%20install%20from%20app%20sources%29%20and%20Add%20App%20%28request%20an%20app%20for%20the%20catalog%29%7CSign%20tab%20reworked%3A%20certificate%20page%2C%20collapsible%20App%20Info%2C%20pinned%20Signature%2FInstall%2C%20bigger%20log%7CInstall%20now%20verifies%20a%20real%20signature%20before%20it%20lights%20up%3B%20new%20frosted%20tab%20bar%20%2B%20pro%20About",
-  "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.0.3/BuildBox-2.0.3.ipa"
+  "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.1.0&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.1.0%2FBuildBox-2.1.0.ipa&size=18%20MB&notes=Catalog-first%20redesign%3A%20Catalog%20home%20tab%2C%20Sources%20as%20a%20sheet%2C%20restyled%20Signed%20tab%7CSigning%20fixed%3A%20release%20apps%20open%20again%2C%20catalog%20signing%20no%20longer%20closes%20the%20app%7CCatalog%20refresh%2C%20Clear%20All%20logs%2C%20matching%20page%20titles%3B%20requires%20iOS%2018%2B"
 }
