@@ -70,4 +70,4 @@ BuildBox is free. If it saves you time, you can support development:
 - Cash App: $mikevillarroel
 
 Made by **Miguel Villarroel** ([@MikeBuildsApp](https://x.com/MikeBuildsApp)) with **MikeBorg** (collaborator).
-Join the community: [MikeBuilds Discord](https://discord.gg/3C3fygY35E)
+Join the community: [MikeBuilds Discord](https://discord.gg/vjJ9rZDNsg)
