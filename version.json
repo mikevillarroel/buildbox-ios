@@ -1,11 +1,13 @@
 {
   "app": "BuildBox",
-  "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.1.0/BuildBox-2.1.0.ipa",
-  "latest_version": "2.1.0",
+  "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.1.1/BuildBox-2.1.1.ipa",
+  "latest_version": "2.1.1",
   "notes": [
-    "Catalog-first redesign: Catalog home tab, Sources as a sheet, restyled Signed tab",
-    "Signing fixed: release apps open again, catalog signing no longer closes the app",
-    "Catalog refresh, Clear All logs, matching page titles; requires iOS 18+"
+    "New official icon: the planet of apps, designed by Miguel",
+    "Sign your way: change any app's icon before signing, inject .deb/.zip tweak packages on-device",
+    "Signed apps show a profile-expiry countdown (orange under 2 days, red when expired)",
+    "Languages: English, Español and Arabic with full RTL layout",
+    "Requires iOS 18 or later"
   ],
-  "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.1.0&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.1.0%2FBuildBox-2.1.0.ipa&size=18%20MB&notes=Catalog-first%20redesign%3A%20Catalog%20home%20tab%2C%20Sources%20as%20a%20sheet%2C%20restyled%20Signed%20tab%7CSigning%20fixed%3A%20release%20apps%20open%20again%2C%20catalog%20signing%20no%20longer%20closes%20the%20app%7CCatalog%20refresh%2C%20Clear%20All%20logs%2C%20matching%20page%20titles%3B%20requires%20iOS%2018%2B"
+  "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.1.1&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.1.1%2FBuildBox-2.1.1.ipa&size=16%20MB&notes=New%20official%20icon%3A%20the%20planet%20of%20apps%2C%20designed%20by%20Miguel%7CSign%20your%20way%3A%20change%20any%20app%27s%20icon%20before%20signing%2C%20inject%20.deb%2F.zip%20tweak%20packages%20on-device%7CSigned%20apps%20show%20a%20profile-expiry%20countdown%20%28orange%20under%202%20days%2C%20red%20when%20expired%29%7CLanguages%3A%20English%2C%20Espa%C3%B1ol%20and%20Arabic%20with%20full%20RTL%20layout%7CRequires%20iOS%2018%20or%20later"
 }
