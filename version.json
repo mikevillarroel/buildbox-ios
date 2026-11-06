@@ -1,1 +1,10 @@
-{"app":"BuildBox","ipa_url":"https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.1.5/BuildBox-2.1.5.ipa","latest_version":"2.1.5","notes":["Security and stability fixes","Requires iOS 18 or later"],"page_url":"https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.1.5&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.1.5%2FBuildBox-2.1.5.ipa&size=16%20MB&notes=Security%20and%20stability%20fixes%7CRequires%20iOS%2018%20or%20later"}
+{
+  "app": "BuildBox",
+  "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.1.5/BuildBox-2.1.5.ipa",
+  "latest_version": "2.1.5",
+  "notes": [
+    "Security and stability fixes",
+    "Requires iOS 18 or later"
+  ],
+  "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.1.5&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.1.5%2FBuildBox-2.1.5.ipa&size=16%20MB&notes=Security%20and%20stability%20fixes%7CRequires%20iOS%2018%20or%20later"
+}
