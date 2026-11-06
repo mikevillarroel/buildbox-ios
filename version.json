@@ -1,10 +1,11 @@
 {
   "app": "BuildBox",
-  "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.1.4/BuildBox-2.1.4.ipa",
-  "latest_version": "2.1.4",
+  "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.1.6/BuildBox-2.1.6.ipa",
+  "latest_version": "2.1.6",
   "notes": [
-    "New app icon",
+    "Fixes a crash when signing large IPAs (like Instagram)",
+    "BuildBox now appears in the Files app",
     "Requires iOS 18 or later"
   ],
-  "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.1.4&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.1.4%2FBuildBox-2.1.4.ipa&size=16%20MB&notes=New%20app%20icon%7CRequires%20iOS%2018%20or%20later"
+  "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.1.6&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.1.6%2FBuildBox-2.1.6.ipa&size=15%20MB&notes=Fixes%20a%20crash%20when%20signing%20large%20IPAs%20%28like%20Instagram%29%7CBuildBox%20now%20appears%20in%20the%20Files%20app%7CRequires%20iOS%2018%20or%20later"
 }
