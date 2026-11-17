@@ -1,10 +1,14 @@
 {
  "app": "BuildBox",
- "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.1.7/BuildBox-2.1.7.ipa",
- "latest_version": "2.1.7",
+ "ipa_url": "https://github.com/mikevillarroel/buildbox-ios/releases/download/v2.1.8/BuildBox-2.1.8.ipa",
+ "latest_version": "2.1.8",
  "notes": [
-  "New: animated .tendie wallpaper inside BuildBox",
+  "New: Sign with Apple ID — sign IPAs with just your Apple ID, no certificate files",
+  "New: free Apple IDs can install their signed apps too (Pair & LocalDev, built in)",
+  "New: Remove Glass theme (on by default) with three bottom-bar styles",
+  "New: Certificate Info and a full General Log in About",
+  "Polished: uniform Sign tab pills, smaller Featured cards",
   "Requires iOS 18 or later"
  ],
- "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.1.7&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.1.7%2FBuildBox-2.1.7.ipa&size=16%20MB&notes=New%3A%20animated%20.tendie%20wallpaper%20inside%20BuildBox%7CRequires%20iOS%2018%20or%20later"
+ "page_url": "https://mikevillarroel.github.io/buildbox-ios/download.html?app=buildbox&v=2.1.8&ipa=https%3A%2F%2Fgithub.com%2Fmikevillarroel%2Fbuildbox-ios%2Freleases%2Fdownload%2Fv2.1.8%2FBuildBox-2.1.8.ipa&size=25+MB&notes=New%3A+Sign+with+Apple+ID+%E2%80%94+sign+IPAs+with+just+your+Apple+ID%2C+no+certificate+files|New%3A+free+Apple+IDs+can+install+their+signed+apps+too+%28Pair+%26+LocalDev%2C+built+in%29|New%3A+Remove+Glass+theme+%28on+by+default%29+with+three+bottom-bar+styles|New%3A+Certificate+Info+and+a+full+General+Log+in+About|Polished%3A+uniform+Sign+tab+pills%2C+smaller+Featured+cards|Requires+iOS+18+or+later"
 }
