@@ -176,6 +176,19 @@
     }
   };
 
+  function deepDecode(s) {
+    // Some in-app browsers percent-encode the query a second time, which
+    // leaves %3A / %2C / %28 visible in the notes. Decode until stable.
+    var prev = s;
+    for (var i = 0; i < 3; i++) {
+      var next;
+      try { next = decodeURIComponent(prev); } catch (e) { break; }
+      if (next === prev) break;
+      prev = next;
+    }
+    return prev;
+  }
+
   function parseParams(str) {
     var out = {};
     if (!str) return out;
@@ -184,8 +197,8 @@
       var eq = pairs[i].indexOf("=");
       if (eq < 0) continue;
       try {
-        var k = decodeURIComponent(pairs[i].slice(0, eq));
-        var v = decodeURIComponent(pairs[i].slice(eq + 1).replace(/\+/g, " "));
+        var k = deepDecode(pairs[i].slice(0, eq));
+        var v = deepDecode(pairs[i].slice(eq + 1).replace(/\+/g, " "));
         out[k] = v;
       } catch (e) { /* skip malformed pair */ }
     }
