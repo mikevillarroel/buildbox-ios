@@ -99,6 +99,13 @@
   .dl-sign strong { color: #fff; }
   .dl-sign .line2 { display: block; margin-top: 4px; color: #7f8fb0; font-size: 13px; }
   .dl-back { color: #6f87b8; font-size: 14px; text-decoration: none; margin-top: 28px; }
+  .dl-apps { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-bottom: 30px; }
+  .dl-apps a {
+    color: #aeb9cf; text-decoration: none; font-size: 13.5px; font-weight: 600;
+    padding: 7px 14px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04);
+  }
+  .dl-apps a.active { color: #fff; background: #1f6bff; border-color: #1f6bff; }
   .dl-foot { color: #55688c; font-size: 12.5px; padding: 18px; text-align: center; }
   .dl-foot a { color: #7f9cc4; text-decoration: none; }
 </style>
@@ -106,6 +113,12 @@
 <body>
   <main class="dl-inner">
     <p class="dl-brand">MIKEBUILDS</p>
+    <nav class="dl-apps" id="dl-apps">
+      <a href="?app=buildbox" data-app="buildbox">BuildBox</a>
+      <a href="?app=decryptonite" data-app="decryptonite">Decryptonite</a>
+      <a href="?app=layers" data-app="layers">Layers</a>
+      <a href="?app=tendiemaker" data-app="tendiemaker">TendieMaker</a>
+    </nav>
     <img class="dl-icon" id="dl-icon" src="assets/buildbox-icon.png" alt="App icon" />
     <h1 class="dl-name" id="dl-name">BuildBox</h1>
     <p class="dl-version" id="dl-version">Version 2.0.1</p>
@@ -241,6 +254,11 @@
   }
   var ipa = params.ipa || app.ipa || "";
   if (!/^https:\/\//.test(ipa)) ipa = app.fallback;
+
+  var navLinks = document.querySelectorAll("#dl-apps a");
+  for (var n = 0; n < navLinks.length; n++) {
+    if (navLinks[n].getAttribute("data-app") === key) navLinks[n].classList.add("active");
+  }
 
   var icon = document.getElementById("dl-icon");
   icon.src = app.icon;
